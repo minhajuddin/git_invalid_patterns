@@ -1,0 +1,63 @@
+#!/bin/bash
+
+debug=1
+pattern_file="$(pwd)/.invalid_patterns"
+
+# NOTE this file has superpowers !!
+# you can add this as a hook in a repository just by calling ~/bin/check-invalid-patterns
+# once you do that you can modify your .invalid_patterns file in the root of the
+# repository to your needs
+# TODO add a callback to the next pre-commit hook at the end
+
+finish(){
+  echo "commit failed: an error occured, exit code: $?"
+}
+trap finish EXIT
+
+log(){
+  if [[ $debug = 1 ]]; then
+    echo "> $1"
+  fi
+}
+
+set -e
+
+# redirect output to stderr
+exec 1>&2
+
+
+# read invalid patterns
+readarray -t invalid_patterns < <(sed -e '/^#/d' -e '/^$/d' $pattern_file)
+
+expose_offenders() {
+  log "we found instances of $1 in your commit"
+  # loop through all the staged files' changes
+  git status --untracked-files=no --porcelain | cut -c4- | sed -e '/.invalid_patterns/d' | while read -r file; do
+    for pattern in ${invalid_patterns[@]}; do
+      log "checking file: '$file' for pattern: '$pattern'"
+      # get diff for this file | extract just additions | remove metadata lines | search for the pattern &> dump output
+      if (git diff HEAD --unified=0 -- $file | grep "^\+" | grep --invert-match "^+++" | grep --fixed-strings "$pattern" &> /dev/null); then
+        echo "found '$pattern' in '$file' diff"
+      fi
+    done
+  done
+  exit -1
+}
+
+if [ ! -f $pattern_file ]; then
+  echo "ERROR: file: $pattern_file not found"
+  exit -1
+fi
+
+sed -e '/^#/d' -e '/^$/d' $pattern_file | while read -r pattern; do
+  log "testing for '$pattern'"
+  # allow patterns in the invalid pattern file :)
+  # if this succeeds it means we found an invalid pattern
+  if (git diff HEAD --staged -- . ':!.invalid_patterns' | grep --fixed-strings "$pattern" &> /dev/null); then
+    # found ya!
+    expose_offenders $pattern
+  fi
+done
+
+echo "pre-commit checks passed!"
+exit -1
