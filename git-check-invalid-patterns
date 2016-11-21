@@ -1,6 +1,58 @@
 #!/bin/bash
+# Source: https://github.com/minhajuddin/git_invalid_patterns
 
-debug=1
+case $1 in
+  init)
+    # check existing hook and abort if already present
+    if [[ -f .git/hooks/pre-commit  ]]; then
+      echo "There is an existing pre-commit hook"
+      echo "Please back it up and remove it"
+      echo 'You can run `mv .git/hooks/pre-commit .git/hooks/pre-commit.bak`'
+      echo "aborting"
+      exit -1
+    fi
+
+    # create a new hook
+    echo "creating a new hook .git/hooks/pre-commit"
+    # create hook
+    cat > .git/hooks/pre-commit <<EOS
+#!/bin/bash
+set -e
+git-check-invalid-patterns
+# --- you can add any other checks you want after this
+EOS
+    chmod +x .git/hooks/pre-commit
+
+    # create an empty .invalid_patterns file
+    if [[ ! -f .invalid_patterns ]]; then
+      echo "creating a sample .invalid_patterns file"
+      cat > .invalid_patterns <<EOS
+# rows starting with "#" are ignored, empty lines are ignored
+
+# rows starting with a backslash are considered to be exact matches
+IO.inspect
+
+# other patterns are used as PCRE regexes
+debugger
+
+# other patterns are used as PCRE regexes
+IEx.pry
+EOS
+    fi
+    echo "done"
+    exit
+    ;;
+  help)
+    echo 'Checks for invalid patterns in your git repository'
+    echo '`git-check-invalid-patterns init` will create a hook to check invalid patterns'
+    echo '`git-check-invalid-patterns` checks invalid patterns in the current staged files'
+    exit
+    ;;
+  *)
+    #fallthrough
+esac
+
+debug=0
 pattern_file="$(pwd)/.invalid_patterns"
 
 # NOTE this file has superpowers !!
@@ -10,7 +62,11 @@ pattern_file="$(pwd)/.invalid_patterns"
 # TODO add a callback to the next pre-commit hook at the end
 
 finish(){
-  echo "commit failed: an error occured, exit code: $?"
+  exit_code=$?
+  if [ $exit_code -ne 0 ]; then
+    echo "commit failed: an error occured, exit code: $exit_code"
+  fi
+  exit $exit_code
 }
 trap finish EXIT
 
@@ -53,11 +109,10 @@ sed -e '/^#/d' -e '/^$/d' $pattern_file | while read -r pattern; do
   log "testing for '$pattern'"
   # allow patterns in the invalid pattern file :)
   # if this succeeds it means we found an invalid pattern
-  if (git diff HEAD --staged -- . ':!.invalid_patterns' | grep --fixed-strings "$pattern" &> /dev/null); then
+  if (git diff HEAD --unified=0 --staged -- . ':!.invalid_patterns' | grep "^\+" | grep --invert-match "^+++" | grep --fixed-strings "$pattern" &> /dev/null); then
     # found ya!
     expose_offenders $pattern
   fi
 done
 
 echo "pre-commit checks passed!"
-exit -1
